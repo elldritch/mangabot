@@ -1,0 +1,10 @@
+cradle:
+  cabal:
+    - path: "./src"
+      component: "lib:mangabot"
+
+    - path: "./app/Main.hs"
+      component: "mangabot:exe:mangabot"
+
+    - path: "./test"
+      component: "mangabot:test:unit-tests"

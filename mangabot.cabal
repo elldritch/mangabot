@@ -1,0 +1,97 @@
+cabal-version: 3.4
+name:          mangabot
+version:       0.1.0.0
+tested-with:   GHC ==9.4.8
+
+common options
+  default-language:   GHC2021
+  default-extensions:
+    DataKinds
+    DefaultSignatures
+    DeriveAnyClass
+    DerivingStrategies
+    DerivingVia
+    DuplicateRecordFields
+    EmptyDataDeriving
+    ExplicitNamespaces
+    GeneralizedNewtypeDeriving
+    LambdaCase
+    MultiWayIf
+    NoFieldSelectors
+    NoImplicitPrelude
+    OverloadedLabels
+    OverloadedRecordDot
+    OverloadedStrings
+    QuasiQuotes
+    RecordWildCards
+    StrictData
+    TemplateHaskell
+    TypeFamilies
+
+  ghc-options:
+    -Wall -Wincomplete-uni-patterns -Wcompat
+    -Wincomplete-record-updates -Wmissing-home-modules
+    -Wmissing-export-lists -Wredundant-constraints -Wunused-packages
+
+common base
+  build-depends: base ==4.17.2.1
+
+common relude
+  build-depends: relude ==1.2.2.0
+
+common optparse-applicative
+  build-depends: optparse-applicative ==0.18.1.0
+
+common req
+  build-depends: req ==3.13.4
+
+library
+  import:
+    options
+    , relude
+    , optparse-applicative
+    , req
+
+  build-depends:
+    , aeson       ==2.2.3.0
+    , megaparsec  ==9.6.1
+    , time        ==1.12.2
+
+  hs-source-dirs:  src
+
+  -- cabal-fmt: expand src
+  exposed-modules:
+    MangaBot
+    MangaBot.Mangadex
+    MangaBot.Reddit
+
+executable mangabot
+  import:
+    options
+    , base
+    , relude
+    , optparse-applicative
+    , req
+
+  ghc-options:    -threaded
+  build-depends:  mangabot
+  hs-source-dirs: app
+  main-is:        Main.hs
+
+  -- cabal-fmt: expand app/ -Main
+  other-modules:
+
+test-suite unit-tests
+  import:         options
+  type:           exitcode-stdio-1.0
+  ghc-options:    -threaded
+  build-depends:
+    , hspec     ==2.11.9
+    , mangabot
+    , relude
+
+  main-is:        Main.hs
+  hs-source-dirs: test
+
+  -- cabal-fmt: expand test/ -Main
+  other-modules:  MangaBotSpec
