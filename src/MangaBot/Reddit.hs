@@ -15,7 +15,7 @@ import Relude
 import Data.Aeson (Value, withObject, (.:))
 import Data.Aeson.Types (parseEither)
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
-import Network.HTTP.Req (GET (..), JsonResponse, MonadHttp, NoReqBody (..), Option, POST (..), basicAuth, header, https, jsonResponse, req, responseBody, (/:), (=:))
+import Network.HTTP.Req (GET (..), JsonResponse, MonadHttp, NoReqBody (..), Option, POST (..), ReqBodyUrlEnc (ReqBodyUrlEnc), basicAuth, header, https, ignoreResponse, jsonResponse, req, responseBody, (/:), (=:))
 import Options.Applicative (Parser, help, long, metavar, strOption)
 
 newtype Subreddit = Subreddit Text
@@ -64,8 +64,13 @@ getNewComments (Subreddit subreddit) = do
       linkPermalink <- commentData .: "link_permalink"
       pure Comment{body, fullname, author, permalink, parentId, linkTitle, linkAuthor, linkId, linkPermalink}
 
-replyToComment :: (MonadHttp m) => BearerToken -> Subreddit -> Text -> m ()
-replyToComment = undefined
+replyToComment :: (MonadHttp m) => BearerToken -> Comment -> Text -> m ()
+replyToComment bearerToken comment reply = do
+  let url = https "oauth.reddit.com" /: "api" /: "comment"
+      formdata = ("parent" =: comment.fullname) <> ("text" =: reply)
+      headers = userAgentHeader <> header "Authorization" ("Bearer " <> bearerToken.token)
+
+  void $ req POST url (ReqBodyUrlEnc formdata) ignoreResponse headers
 
 data AuthInfo = AuthInfo
   { clientId :: Text
@@ -84,7 +89,7 @@ authInfoP =
     <*> strOption (long "password" <> metavar "PASSWORD" <> help "Reddit bot password")
 
 data BearerToken = BearerToken
-  { token :: Text
+  { token :: ByteString
   , expiresAt :: UTCTime
   }
   deriving stock (Show)
@@ -96,9 +101,9 @@ getToken :: (MonadHttp m) => AuthInfo -> m (Either String BearerToken)
 getToken AuthInfo{username, password, clientId, clientSecret} = do
   let url = https "www.reddit.com" /: "api" /: "v1" /: "access_token"
       queryParams =
-        "grant_type" =: ("password" :: Text)
-          <> "username" =: username
-          <> "password" =: password
+        ("grant_type" =: ("password" :: Text))
+          <> ("username" =: username)
+          <> ("password" =: password)
       headers =
         userAgentHeader
           <> basicAuth (encodeUtf8 clientId) (encodeUtf8 clientSecret)
@@ -106,6 +111,6 @@ getToken AuthInfo{username, password, clientId, clientSecret} = do
   response :: JsonResponse Value <- req POST url NoReqBody jsonResponse (queryParams <> headers)
   now <- liftIO getCurrentTime
   pure $ flip parseEither (responseBody response) $ withObject "BearerToken" $ \o -> do
-    token <- o .: "access_token"
+    token :: Text <- o .: "access_token"
     expiresIn :: Int <- o .: "expires_in"
-    pure BearerToken{token, expiresAt = addUTCTime (fromIntegral expiresIn) now}
+    pure BearerToken{token = encodeUtf8 token, expiresAt = addUTCTime (fromIntegral expiresIn) now}

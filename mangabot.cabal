@@ -45,17 +45,21 @@ common optparse-applicative
 common req
   build-depends: req ==3.13.4
 
+common time
+  build-depends: time ==1.12.2
+
 library
   import:
     options
+    , base
     , relude
     , optparse-applicative
     , req
+    , time
 
   build-depends:
     , aeson       ==2.2.3.0
     , megaparsec  ==9.6.1
-    , time        ==1.12.2
 
   hs-source-dirs:  src
 
@@ -72,6 +76,7 @@ executable mangabot
     , relude
     , optparse-applicative
     , req
+    , time
 
   ghc-options:    -threaded
   build-depends:  mangabot
