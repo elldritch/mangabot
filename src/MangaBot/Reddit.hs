@@ -13,8 +13,7 @@ module MangaBot.Reddit (
 
 import Relude
 
-import Data.Aeson (FromJSON, Value (..), withArray, withObject, (.:))
-import Data.Aeson.Types (Object, Parser, parseEither)
+import Data.Aeson.Types (FromJSON, Object, Parser, ToJSON, Value (..), parseEither, withArray, withObject, (.:))
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Network.HTTP.Req (GET (..), JsonResponse, MonadHttp, NoReqBody (..), Option, POST (..), ReqBodyUrlEnc (ReqBodyUrlEnc), basicAuth, header, https, ignoreResponse, jsonResponse, req, responseBody, (/:), (=:))
@@ -22,7 +21,8 @@ import Options.Applicative (help, long, metavar, strOption)
 import Options.Applicative qualified as Optparse
 
 newtype Subreddit = Subreddit Text
-  deriving stock (Show)
+  deriving stock (Show, Generic)
+  deriving anyclass (ToJSON)
 
 subredditP :: Optparse.Parser Subreddit
 subredditP = Subreddit <$> strOption (long "subreddit" <> metavar "SUBREDDIT" <> help "Subreddit to watch")
@@ -36,7 +36,8 @@ data Comment = Comment
   , subreddit :: Text
   , articleFullname :: Fullname
   }
-  deriving stock (Show)
+  deriving stock (Show, Generic, Eq, Ord)
+  deriving anyclass (ToJSON)
 
 parseKind :: Text -> (Object -> Parser a) -> Object -> Parser a
 parseKind kindName parseData o = do
@@ -63,7 +64,7 @@ parseComment = parseKind "t1" $ \comment -> do
 
 newtype Fullname = Fullname Text
   deriving stock (Show)
-  deriving newtype (FromJSON, IsString)
+  deriving newtype (Eq, Ord, IsString, FromJSON, ToJSON)
 
 fullnameToId :: Fullname -> Text
 fullnameToId (Fullname fullname) = case T.take 3 fullname of
@@ -127,7 +128,8 @@ data AuthInfo = AuthInfo
   , username :: Text
   , password :: Text
   }
-  deriving stock (Show)
+  deriving stock (Show, Generic)
+  deriving anyclass (ToJSON)
 
 authInfoP :: Optparse.Parser AuthInfo
 authInfoP =

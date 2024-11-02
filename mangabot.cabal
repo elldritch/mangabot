@@ -39,6 +39,9 @@ common base
 common relude
   build-depends: relude ==1.2.2.0
 
+common aeson
+  build-depends: aeson ==2.2.3.0
+
 common optparse-applicative
   build-depends: optparse-applicative ==0.18.1.0
 
@@ -53,14 +56,12 @@ library
     options
     , base
     , relude
+    , aeson
     , optparse-applicative
     , req
     , time
 
-  build-depends:
-    , aeson       ==2.2.3.0
-    , megaparsec  ==9.6.1
-
+  build-depends:   megaparsec ==9.6.1
   hs-source-dirs:  src
 
   -- cabal-fmt: expand src
@@ -74,12 +75,16 @@ executable mangabot
     options
     , base
     , relude
+    , aeson
     , optparse-applicative
     , req
     , time
 
   ghc-options:    -threaded
-  build-depends:  mangabot
+  build-depends:
+    , mangabot
+    , monad-logger-aeson  ==0.4.1.3
+
   hs-source-dirs: app
   main-is:        Main.hs
 

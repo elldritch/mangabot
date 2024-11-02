@@ -2,8 +2,7 @@ module MangaBot.Mangadex (searchManga, Manga (..)) where
 
 import Relude
 
-import Data.Aeson (Value, withObject, (.:), (.:?))
-import Data.Aeson.Types (parseEither)
+import Data.Aeson.Types (ToJSON, Value, parseEither, withObject, (.:), (.:?))
 import Network.HTTP.Req (GET (..), JsonResponse, MonadHttp, NoReqBody (..), Option, header, https, jsonResponse, req, responseBody, (/:), (=:))
 
 data Manga = Manga
@@ -18,7 +17,8 @@ data Manga = Manga
   , contentRating :: Text
   , tags :: [Text]
   }
-  deriving stock (Show)
+  deriving stock (Show, Generic)
+  deriving anyclass (ToJSON)
 
 userAgentHeader :: Option s
 userAgentHeader = header "User-Agent" "MangaBot v0.1.0"
