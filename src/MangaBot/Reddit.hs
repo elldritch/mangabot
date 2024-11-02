@@ -78,26 +78,26 @@ fullnameToId (Fullname fullname) = case T.take 3 fullname of
  where
   uid = T.drop 3 fullname
 
-getNewComments :: (MonadHttp m) => Subreddit -> m (Either String [Comment])
-getNewComments (Subreddit s) = do
-  let url = https "api.reddit.com" /: "r" /: s /: "comments.json"
-      headers = userAgentHeader
+getNewComments :: (MonadHttp m) => BearerToken -> Subreddit -> m (Either String [Comment])
+getNewComments bearerToken (Subreddit s) = do
+  let url = https "oauth.reddit.com" /: "r" /: s /: "comments.json"
+      headers = userAgentHeader <> header "Authorization" ("Bearer " <> bearerToken.token)
       queryParams = "limit" =: (100 :: Int)
 
   response :: JsonResponse Value <- req GET url NoReqBody jsonResponse (headers <> queryParams)
   pure $ flip parseEither (responseBody response) $ withObject "Listing" $ parseListing parseComment
 
-getReplies :: (MonadHttp m) => Comment -> m (Either String [Comment])
-getReplies Comment{commentId, subreddit, articleFullname} = do
+getReplies :: (MonadHttp m) => BearerToken -> Comment -> m (Either String [Comment])
+getReplies bearerToken Comment{commentId, subreddit, articleFullname} = do
   let url =
-        https "api.reddit.com"
+        https "oauth.reddit.com"
           /: "r"
           /: subreddit
           /: "comments"
           /: fullnameToId articleFullname
           /: "comment"
           /: commentId
-      headers = userAgentHeader
+      headers = userAgentHeader <> header "Authorization" ("Bearer " <> bearerToken.token)
       queryParams = "limit" =: (100 :: Int)
 
   response :: JsonResponse Value <- req GET url NoReqBody jsonResponse (headers <> queryParams)

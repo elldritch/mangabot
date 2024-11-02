@@ -41,6 +41,7 @@ data MangaBotState = MangaBotState
 main :: IO ()
 main = runStdoutLoggingT $ do
   options <- lift $ execParser argv
+  hSetBuffering stdout LineBuffering
 
   logInfo $ "Starting MangaBot" :# ["options" .= options]
   -- Watch the subreddit for new comments.
@@ -50,6 +51,33 @@ main = runStdoutLoggingT $ do
       logDebug "Starting run"
 
       result <- runExceptT $ do
+        -- Refresh or acquire an access token. Even though this is not
+        -- technically needed for some of the public read API requests, Reddit
+        -- will block requests that don't have an access token.
+        logDebug "Acquiring access token"
+        bearerToken <- do
+          oldToken <- gets (.bearerToken)
+          case oldToken of
+            Nothing -> do
+              logDebug "No existing token, acquiring new token"
+              newToken <- runReq' (getToken options.authInfo)
+              modify $ \s -> s{bearerToken = Just newToken}
+              logDebug "Acquired new token"
+              pure newToken
+            Just token -> do
+              logDebug $ "Found existing token" :# ["expires_at" .= token.expiresAt]
+              now <- liftIO getCurrentTime
+              if token.expiresAt > addUTCTime 10 now
+                then do
+                  logDebug "Token is still valid, using it"
+                  pure token
+                else do
+                  logDebug "Token is expired, acquiring new token"
+                  newToken <- runReq' (getToken options.authInfo)
+                  modify $ \s -> s{bearerToken = Just newToken}
+                  logDebug "Acquired new token"
+                  pure newToken
+
         -- TODO: This only retrieves the first page of new comments (at most
         -- 100). It's possible that there could be more than 100 new comments
         -- since the last run 10 seconds ago, but that's pretty unlikely. If
@@ -57,7 +85,7 @@ main = runStdoutLoggingT $ do
         -- recently replied-to comment and traverses the response of the new
         -- comments API until we find a comment that has been replied to.
         logDebug "Retrieving new comments"
-        comments <- runReq' (getNewComments options.subreddit)
+        comments <- runReq' (getNewComments bearerToken options.subreddit)
         logDebug $ "Retrieved new comments" :# ["comments" .= map (.permalink) comments]
 
         -- Loop through every new comment.
@@ -84,7 +112,7 @@ main = runStdoutLoggingT $ do
                 -- article in cache, so that we can make only a single API
                 -- request per article rather than per comment.
                 logDebug "Retrieving replies from Reddit"
-                replies <- lift $ runReq' $ getReplies comment
+                replies <- lift $ runReq' $ getReplies bearerToken comment
                 logDebug "Retrieved replies from Reddit"
                 -- TODO: This will eventually run out of memory. We should
                 -- implement some sort of eviction. A big enough LRU should
@@ -111,35 +139,10 @@ main = runStdoutLoggingT $ do
         -- replies.
         if null replies
           then logDebug "No replies to perform"
-          else do
-            logDebug "Acquiring access token"
-            bearerToken <- do
-              oldToken <- gets (.bearerToken)
-              case oldToken of
-                Nothing -> do
-                  logDebug "No existing token, acquiring new token"
-                  newToken <- runReq' (getToken options.authInfo)
-                  modify $ \s -> s{bearerToken = Just newToken}
-                  logDebug "Acquired new token"
-                  pure newToken
-                Just token -> do
-                  logDebug $ "Found existing token" :# ["expires_at" .= token.expiresAt]
-                  now <- liftIO getCurrentTime
-                  if token.expiresAt > addUTCTime 10 now
-                    then do
-                      logDebug "Token is still valid, using it"
-                      pure token
-                    else do
-                      logDebug "Token is expired, acquiring new token"
-                      newToken <- runReq' (getToken options.authInfo)
-                      modify $ \s -> s{bearerToken = Just newToken}
-                      logDebug "Acquired new token"
-                      pure newToken
-
-            forM_ replies $ \(comment, reply) -> withThreadContext ["comment" .= comment] $ do
-              logDebug $ "Replying to comment" :# ["reply" .= reply]
-              runReq defaultHttpConfig $ replyToComment bearerToken comment reply
-              logDebug "Replied to comment"
+          else forM_ replies $ \(comment, reply) -> withThreadContext ["comment" .= comment] $ do
+            logDebug $ "Replying to comment" :# ["reply" .= reply]
+            runReq defaultHttpConfig $ replyToComment bearerToken comment reply
+            logDebug "Replied to comment"
 
       case result of
         Left msg -> logError $ "Encountered errors during run" :# ["message" .= msg]
