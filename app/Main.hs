@@ -3,13 +3,13 @@ module Main (main) where
 import Relude
 
 import Control.Concurrent (threadDelay)
-import Data.Time (getCurrentTime)
+import Data.Time (addUTCTime, getCurrentTime)
 import Network.HTTP.Req (Req, defaultHttpConfig, runReq)
 import Options.Applicative (Parser, ParserInfo, execParser, fullDesc, helper, info, progDesc)
 
-import MangaBot (parseComment, pickManga, renderReply)
+import MangaBot (parseMentions, pickManga, renderReply)
 import MangaBot.Mangadex (searchManga)
-import MangaBot.Reddit (AuthInfo, BearerToken (..), Comment (..), Subreddit, authInfoP, getNewComments, getToken, replyToComment, subredditP)
+import MangaBot.Reddit (AuthInfo (..), BearerToken (..), Comment (..), Subreddit, authInfoP, getNewComments, getReplies, getToken, replyToComment, subredditP)
 
 data Options = Options
   { authInfo :: AuthInfo
@@ -38,13 +38,18 @@ main = do
     result <- runExceptT $ do
       comments <- runReq' (getNewComments options.subreddit)
 
-      -- For every comment that matches the mention format, try to find a
-      -- matching manga. If a matching manga is found, prepare a reply.
-      let matches = filter (not . null . snd) $ map toMatch comments
-
-      replies <- forM matches $ \(comment, mentions) -> do
+      -- Loop through every new comment.
+      replies <- fmap catMaybes $ forM comments $ \comment -> runMaybeT $ do
+        let mentions = parseMentions comment
+        -- Don't reply to comments that don't mention any manga.
+        guard (not . null $ mentions)
+        -- Don't reply to comments that the bot has already replied to.
+        replies <- lift $ runReq' $ getReplies comment
+        guard (not (any ((options.authInfo.username ==) . (.author)) replies))
+        -- For all comments that mention a manga and haven't been replied to,
+        -- prepare a reply.
         results <- forM mentions $ \mention -> do
-          searchResults <- runReq' (searchManga mention)
+          searchResults <- lift $ runReq' (searchManga mention)
           let result = pickManga mention searchResults
           pure (mention, result)
         pure (comment, renderReply results)
@@ -60,7 +65,7 @@ main = do
             pure newToken
           Just token -> do
             now <- liftIO getCurrentTime
-            if token.expiresAt > now
+            if token.expiresAt > addUTCTime 10 now
               then pure token
               else do
                 newToken <- runReq' (getToken options.authInfo)
@@ -69,10 +74,6 @@ main = do
 
       forM_ replies $ \(comment, reply) -> do
         runReq defaultHttpConfig $ replyToComment bearerToken comment reply
-        print (comment, reply)
-
-      -- TODO: Don't reply to the same comment twice.
-      undefined
 
     case result of
       Left msg -> liftIO $ putStrLn $ "Encountered errors: " <> msg
@@ -87,6 +88,3 @@ main = do
   foreverWithState s a = do
     s' <- execStateT a s
     foreverWithState s' a
-
-  toMatch :: Comment -> (Comment, [Text])
-  toMatch comment = (comment, parseComment comment)

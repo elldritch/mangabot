@@ -3,6 +3,7 @@ module MangaBot.Reddit (
   subredditP,
   Comment (..),
   getNewComments,
+  getReplies,
   replyToComment,
   AuthInfo (..),
   authInfoP,
@@ -12,62 +13,110 @@ module MangaBot.Reddit (
 
 import Relude
 
-import Data.Aeson (Value, withObject, (.:))
-import Data.Aeson.Types (parseEither)
+import Data.Aeson (FromJSON, Value (..), withArray, withObject, (.:))
+import Data.Aeson.Types (Object, Parser, parseEither)
+import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Network.HTTP.Req (GET (..), JsonResponse, MonadHttp, NoReqBody (..), Option, POST (..), ReqBodyUrlEnc (ReqBodyUrlEnc), basicAuth, header, https, ignoreResponse, jsonResponse, req, responseBody, (/:), (=:))
-import Options.Applicative (Parser, help, long, metavar, strOption)
+import Options.Applicative (help, long, metavar, strOption)
+import Options.Applicative qualified as Optparse
 
 newtype Subreddit = Subreddit Text
   deriving stock (Show)
 
-subredditP :: Parser Subreddit
+subredditP :: Optparse.Parser Subreddit
 subredditP = Subreddit <$> strOption (long "subreddit" <> metavar "SUBREDDIT" <> help "Subreddit to watch")
 
 data Comment = Comment
-  { fullname :: Text
+  { commentId :: Text
   , body :: Text
   , author :: Text
   , permalink :: Text
-  , parentId :: Text
-  , linkTitle :: Text
-  , linkAuthor :: Text
-  , linkId :: Text
-  , linkPermalink :: Text
+  , parentFullname :: Fullname
+  , subreddit :: Text
+  , articleFullname :: Fullname
   }
   deriving stock (Show)
 
+parseKind :: Text -> (Object -> Parser a) -> Object -> Parser a
+parseKind kindName parseData o = do
+  kind <- o .: "kind"
+  guard (kind == kindName)
+  innerData <- o .: "data"
+  parseData innerData
+
+parseListing :: (Object -> Parser a) -> Object -> Parser [a]
+parseListing parseChild = parseKind "Listing" $ \listing -> do
+  children <- listing .: "children"
+  traverse parseChild children
+
+parseComment :: Object -> Parser Comment
+parseComment = parseKind "t1" $ \comment -> do
+  commentId <- comment .: "id"
+  body <- comment .: "body"
+  author <- comment .: "author"
+  permalink <- comment .: "permalink"
+  parentFullname <- comment .: "parent_id"
+  subreddit <- comment .: "subreddit"
+  articleFullname <- comment .: "link_id"
+  pure Comment{commentId, body, author, permalink, parentFullname, subreddit, articleFullname}
+
+newtype Fullname = Fullname Text
+  deriving stock (Show)
+  deriving newtype (FromJSON, IsString)
+
+fullnameToId :: Fullname -> Text
+fullnameToId (Fullname fullname) = case T.take 3 fullname of
+  "t1_" -> uid
+  "t2_" -> uid
+  "t3_" -> uid
+  "t4_" -> uid
+  "t5_" -> uid
+  "t6_" -> uid
+  _ -> error $ "invalid fullname: " <> show fullname
+ where
+  uid = T.drop 3 fullname
+
 getNewComments :: (MonadHttp m) => Subreddit -> m (Either String [Comment])
-getNewComments (Subreddit subreddit) = do
-  let url = https "api.reddit.com" /: "r" /: subreddit /: "comments.json"
+getNewComments (Subreddit s) = do
+  let url = https "api.reddit.com" /: "r" /: s /: "comments.json"
       headers = userAgentHeader
       queryParams = "limit" =: (100 :: Int)
 
   response :: JsonResponse Value <- req GET url NoReqBody jsonResponse (headers <> queryParams)
-  pure $ flip parseEither (responseBody response) $ withObject "Listing" $ \o -> do
-    listingKind :: Text <- o .: "kind"
-    guard (listingKind == "Listing")
-    listingData <- o .: "data"
-    comments <- listingData .: "children"
-    forM comments $ \comment -> do
-      commentKind :: Text <- comment .: "kind"
-      guard (commentKind == "t1")
-      commentData <- comment .: "data"
-      fullname <- commentData .: "name"
-      body <- commentData .: "body"
-      author <- commentData .: "author"
-      permalink <- commentData .: "permalink"
-      parentId <- commentData .: "parent_id"
-      linkTitle <- commentData .: "link_title"
-      linkAuthor <- commentData .: "link_author"
-      linkId <- commentData .: "link_id"
-      linkPermalink <- commentData .: "link_permalink"
-      pure Comment{body, fullname, author, permalink, parentId, linkTitle, linkAuthor, linkId, linkPermalink}
+  pure $ flip parseEither (responseBody response) $ withObject "Listing" $ parseListing parseComment
+
+getReplies :: (MonadHttp m) => Comment -> m (Either String [Comment])
+getReplies Comment{commentId, subreddit, articleFullname} = do
+  let url =
+        https "api.reddit.com"
+          /: "r"
+          /: subreddit
+          /: "comments"
+          /: fullnameToId articleFullname
+          /: "comment"
+          /: commentId
+      headers = userAgentHeader
+      queryParams = "limit" =: (100 :: Int)
+
+  response :: JsonResponse Value <- req GET url NoReqBody jsonResponse (headers <> queryParams)
+  -- The top-level response is a two-element array, where the second element is a
+  -- Listing of Comment objects.
+  pure $ flip parseEither (responseBody response) $ withArray "Response" $ \a -> case toList a of
+    [_, Object commentResponse] -> parseReplies commentResponse
+    _ -> fail "unexpected response shape"
+ where
+  parseReplies = (<<$>>) concat . parseListing $ parseKind "t1" $ \o -> do
+    replies <- o .: "replies"
+    case replies of
+      Object rs -> parseListing parseComment rs
+      String "" -> pure []
+      _ -> fail "unexpected replies shape"
 
 replyToComment :: (MonadHttp m) => BearerToken -> Comment -> Text -> m ()
 replyToComment bearerToken comment reply = do
   let url = https "oauth.reddit.com" /: "api" /: "comment"
-      formdata = ("parent" =: comment.fullname) <> ("text" =: reply)
+      formdata = ("parent" =: ("t1_" <> comment.commentId)) <> ("text" =: reply)
       headers = userAgentHeader <> header "Authorization" ("Bearer " <> bearerToken.token)
 
   void $ req POST url (ReqBodyUrlEnc formdata) ignoreResponse headers
@@ -80,7 +129,7 @@ data AuthInfo = AuthInfo
   }
   deriving stock (Show)
 
-authInfoP :: Parser AuthInfo
+authInfoP :: Optparse.Parser AuthInfo
 authInfoP =
   AuthInfo
     <$> strOption (long "client-id" <> metavar "CLIENT_ID" <> help "OAuth2 client ID")

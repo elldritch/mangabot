@@ -1,4 +1,4 @@
-module MangaBot (parseComment, pickManga, renderReply) where
+module MangaBot (parseMentions, pickManga, renderReply) where
 
 import Relude
 
@@ -12,8 +12,8 @@ import MangaBot.Reddit (Comment (..))
 
 type Parser = Parsec Void Text
 
-parseComment :: Comment -> [Text]
-parseComment Comment{body} = case runParser commentP "" body of
+parseMentions :: Comment -> [Text]
+parseMentions Comment{body} = case runParser commentP "" body of
   Left err -> error $ "Failed to parse comment: " <> toText (errorBundlePretty err)
   Right matches -> matches
 
