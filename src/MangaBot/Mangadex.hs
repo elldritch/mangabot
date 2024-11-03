@@ -2,8 +2,11 @@ module MangaBot.Mangadex (searchManga, Manga (..)) where
 
 import Relude
 
+import Control.Monad.Logger.Aeson (MonadLogger)
 import Data.Aeson.Types (ToJSON, Value, parseEither, withObject, (.:), (.:?))
-import Network.HTTP.Req (GET (..), JsonResponse, MonadHttp, NoReqBody (..), Option, header, https, jsonResponse, req, responseBody, (/:), (=:))
+import Network.HTTP.Req (GET (..), JsonResponse, MonadHttp, NoReqBody (..), Option, header, https, responseBody, (/:), (=:))
+
+import MangaBot.Logging (reqL)
 
 data Manga = Manga
   { mangaId :: Text
@@ -23,12 +26,12 @@ data Manga = Manga
 userAgentHeader :: Option s
 userAgentHeader = header "User-Agent" "MangaBot v0.1.0"
 
-searchManga :: (MonadHttp m) => Text -> m (Either String [Manga])
+searchManga :: (MonadLogger m, MonadHttp m) => Text -> m (Either String [Manga])
 searchManga needle = do
   let url = https "api.mangadex.org" /: "manga"
       options = userAgentHeader <> "title" =: needle
 
-  response :: JsonResponse Value <- req GET url NoReqBody jsonResponse options
+  response :: JsonResponse Value <- reqL GET url NoReqBody options
   pure $ flip parseEither (responseBody response) $ withObject "collection" $ \o -> do
     result :: Text <- o .: "result"
     guard (result == "ok")

@@ -1,4 +1,5 @@
 module MangaBot.Reddit (
+  RedditClientConfig (..),
   Subreddit (..),
   subredditP,
   Comment (..),
@@ -13,12 +14,15 @@ module MangaBot.Reddit (
 
 import Relude
 
-import Data.Aeson.Types (FromJSON, Object, Parser, ToJSON, Value (..), parseEither, withArray, withObject, (.:))
+import Control.Monad.Logger.Aeson (MonadLogger)
+import Data.Aeson.Types (FromJSON, Object, Parser, ToJSON (..), Value (..), object, parseEither, withArray, withObject, (.:), (.=))
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
-import Network.HTTP.Req (GET (..), JsonResponse, MonadHttp, NoReqBody (..), Option, POST (..), ReqBodyUrlEnc (ReqBodyUrlEnc), basicAuth, header, https, ignoreResponse, jsonResponse, req, responseBody, (/:), (=:))
+import Network.HTTP.Req (GET (..), JsonResponse, MonadHttp, NoReqBody (..), Option, POST (..), ReqBodyUrlEnc (ReqBodyUrlEnc), basicAuth, header, https, responseBody, (/:), (=:))
 import Options.Applicative (help, long, metavar, strOption)
 import Options.Applicative qualified as Optparse
+
+import MangaBot.Logging (reqL, reqL')
 
 newtype Subreddit = Subreddit Text
   deriving stock (Show, Generic)
@@ -78,17 +82,28 @@ fullnameToId (Fullname fullname) = case T.take 3 fullname of
  where
   uid = T.drop 3 fullname
 
-getNewComments :: (MonadHttp m) => BearerToken -> Subreddit -> m (Either String [Comment])
-getNewComments bearerToken (Subreddit s) = do
+data RedditClientConfig = RedditClientConfig
+  { owner :: Text
+  , bearerToken :: BearerToken
+  }
+
+makeHeaders :: RedditClientConfig -> Option s
+makeHeaders RedditClientConfig{bearerToken, owner} =
+  header "User-Agent" ("MangaBot v0.1.0 (by /u/" <> encodeUtf8 owner <> ")")
+    <> header "Authorization" ("Bearer " <> bearerToken.token)
+
+getNewComments :: (MonadLogger m, MonadReader RedditClientConfig m, MonadHttp m) => Subreddit -> m (Either String [Comment])
+getNewComments (Subreddit s) = do
+  headers <- makeHeaders <$> ask
   let url = https "oauth.reddit.com" /: "r" /: s /: "comments.json"
-      headers = userAgentHeader <> header "Authorization" ("Bearer " <> bearerToken.token)
       queryParams = "limit" =: (100 :: Int)
 
-  response :: JsonResponse Value <- req GET url NoReqBody jsonResponse (headers <> queryParams)
+  response :: JsonResponse Value <- reqL GET url NoReqBody (headers <> queryParams)
   pure $ flip parseEither (responseBody response) $ withObject "Listing" $ parseListing parseComment
 
-getReplies :: (MonadHttp m) => BearerToken -> Comment -> m (Either String [Comment])
-getReplies bearerToken Comment{commentId, subreddit, articleFullname} = do
+getReplies :: (MonadLogger m, MonadReader RedditClientConfig m, MonadHttp m) => Comment -> m (Either String [Comment])
+getReplies Comment{commentId, subreddit, articleFullname} = do
+  headers <- makeHeaders <$> ask
   let url =
         https "oauth.reddit.com"
           /: "r"
@@ -97,10 +112,9 @@ getReplies bearerToken Comment{commentId, subreddit, articleFullname} = do
           /: fullnameToId articleFullname
           /: "comment"
           /: commentId
-      headers = userAgentHeader <> header "Authorization" ("Bearer " <> bearerToken.token)
       queryParams = "limit" =: (100 :: Int)
 
-  response :: JsonResponse Value <- req GET url NoReqBody jsonResponse (headers <> queryParams)
+  response :: JsonResponse Value <- reqL GET url NoReqBody (headers <> queryParams)
   -- The top-level response is a two-element array, where the second element is a
   -- Listing of Comment objects.
   pure $ flip parseEither (responseBody response) $ withArray "Response" $ \a -> case toList a of
@@ -114,13 +128,13 @@ getReplies bearerToken Comment{commentId, subreddit, articleFullname} = do
       String "" -> pure []
       _ -> fail "unexpected replies shape"
 
-replyToComment :: (MonadHttp m) => BearerToken -> Comment -> Text -> m ()
-replyToComment bearerToken comment reply = do
+replyToComment :: (MonadLogger m, MonadReader RedditClientConfig m, MonadHttp m) => Comment -> Text -> m ()
+replyToComment comment reply = do
+  headers <- makeHeaders <$> ask
   let url = https "oauth.reddit.com" /: "api" /: "comment"
       formdata = ("parent" =: ("t1_" <> comment.commentId)) <> ("text" =: reply)
-      headers = userAgentHeader <> header "Authorization" ("Bearer " <> bearerToken.token)
 
-  void $ req POST url (ReqBodyUrlEnc formdata) ignoreResponse headers
+  void $ reqL' POST url (ReqBodyUrlEnc formdata) headers
 
 data AuthInfo = AuthInfo
   { clientId :: Text
@@ -128,8 +142,16 @@ data AuthInfo = AuthInfo
   , username :: Text
   , password :: Text
   }
-  deriving stock (Show, Generic)
-  deriving anyclass (ToJSON)
+  deriving stock (Show)
+
+instance ToJSON AuthInfo where
+  toJSON AuthInfo{clientId, username} =
+    object
+      [ "clientId" .= clientId
+      , "clientSecret" .= String "<REDACTED>"
+      , "username" .= username
+      , "password" .= String "<REDACTED>"
+      ]
 
 authInfoP :: Optparse.Parser AuthInfo
 authInfoP =
@@ -145,21 +167,18 @@ data BearerToken = BearerToken
   }
   deriving stock (Show)
 
-userAgentHeader :: Option s
-userAgentHeader = header "User-Agent" "MangaBot v0.1.0"
-
-getToken :: (MonadHttp m) => AuthInfo -> m (Either String BearerToken)
-getToken AuthInfo{username, password, clientId, clientSecret} = do
+getToken :: (MonadLogger m, MonadHttp m) => Text -> AuthInfo -> m (Either String BearerToken)
+getToken owner AuthInfo{username, password, clientId, clientSecret} = do
   let url = https "www.reddit.com" /: "api" /: "v1" /: "access_token"
       queryParams =
         ("grant_type" =: ("password" :: Text))
           <> ("username" =: username)
           <> ("password" =: password)
       headers =
-        userAgentHeader
+        header "User-Agent" ("MangaBot v0.1.0 (by /u/" <> encodeUtf8 owner <> ")")
           <> basicAuth (encodeUtf8 clientId) (encodeUtf8 clientSecret)
 
-  response :: JsonResponse Value <- req POST url NoReqBody jsonResponse (queryParams <> headers)
+  response :: JsonResponse Value <- reqL POST url NoReqBody (queryParams <> headers)
   now <- liftIO getCurrentTime
   pure $ flip parseEither (responseBody response) $ withObject "BearerToken" $ \o -> do
     token :: Text <- o .: "access_token"

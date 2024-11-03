@@ -8,6 +8,7 @@ MangaBot watches a subreddit for comments that mention a `[[Manga title in brack
 $ cabal run mangabot -- --help
 Usage: mangabot --client-id CLIENT_ID --client-secret CLIENT_SECRET
                 --username USERNAME --password PASSWORD --subreddit SUBREDDIT
+                --owner-username USERNAME [--dry-run]
 
   MangaBot
 
@@ -18,5 +19,9 @@ Available options:
   --username USERNAME      Reddit bot username
   --password PASSWORD      Reddit bot password
   --subreddit SUBREDDIT    Subreddit to watch
+  --owner-username USERNAME
+                           Username of the bot operator
+  --dry-run                Don't actually reply to comments
   -h,--help                Show this help text
+
 ```

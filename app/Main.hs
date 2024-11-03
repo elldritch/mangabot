@@ -7,16 +7,20 @@ import Control.Concurrent (threadDelay)
 import Control.Monad.Logger.Aeson (Message (..), MonadLogger, logDebug, logError, logInfo, runStdoutLoggingT, withThreadContext, (.=))
 import Data.Aeson.Types (ToJSON)
 import Data.Time (addUTCTime, getCurrentTime)
-import Network.HTTP.Req (Req, defaultHttpConfig, runReq)
-import Options.Applicative (Parser, ParserInfo, execParser, fullDesc, helper, info, progDesc)
+import Data.UUID.V4 (nextRandom)
+import Network.HTTP.Req (defaultHttpConfig, runReq)
+import Options.Applicative (Parser, ParserInfo, execParser, fullDesc, help, helper, info, long, metavar, progDesc, strOption, switch)
 
 import MangaBot (parseMentions, pickManga, renderReply)
 import MangaBot.Mangadex (searchManga)
-import MangaBot.Reddit (AuthInfo (..), BearerToken (..), Comment (..), Subreddit, authInfoP, getNewComments, getReplies, getToken, replyToComment, subredditP)
+import MangaBot.Orphans ()
+import MangaBot.Reddit (AuthInfo (..), BearerToken (..), Comment (..), RedditClientConfig (..), Subreddit, authInfoP, getNewComments, getReplies, getToken, replyToComment, subredditP)
 
 data Options = Options
   { authInfo :: AuthInfo
   , subreddit :: Subreddit
+  , ownerUsername :: Text
+  , dryRun :: Bool
   }
   deriving stock (Show, Generic)
   deriving anyclass (ToJSON)
@@ -26,27 +30,29 @@ optionsP =
   Options
     <$> authInfoP
     <*> subredditP
+    <*> strOption (long "owner-username" <> metavar "USERNAME" <> help "Username of the bot operator")
+    <*> switch (long "dry-run" <> help "Don't actually reply to comments")
 
-argv :: ParserInfo Options
-argv = info (optionsP <**> helper) (fullDesc <> progDesc "MangaBot")
+argparser :: ParserInfo Options
+argparser = info (optionsP <**> helper) (fullDesc <> progDesc "MangaBot")
 
 secondsToMicro :: Int -> Int
 secondsToMicro = (* 1000000)
 
 data MangaBotState = MangaBotState
-  { bearerToken :: Maybe BearerToken
+  { bearerTokenCache :: Maybe BearerToken
   , repliesCache :: Map Comment [Comment]
   }
 
 main :: IO ()
-main = runStdoutLoggingT $ do
-  options <- lift $ execParser argv
+main = runReq defaultHttpConfig $ runStdoutLoggingT $ do
+  options <- liftIO $ execParser argparser
   hSetBuffering stdout LineBuffering
 
   logInfo $ "Starting MangaBot" :# ["options" .= options]
   -- Watch the subreddit for new comments.
-  foreverWithState MangaBotState{bearerToken = Nothing, repliesCache = mempty} $ do
-    runId <- liftIO getCurrentTime
+  foreverWithState MangaBotState{bearerTokenCache = Nothing, repliesCache = mempty} $ do
+    runId <- liftIO nextRandom
     withThreadContext ["runId" .= runId] $ do
       logDebug "Starting run"
 
@@ -55,13 +61,16 @@ main = runStdoutLoggingT $ do
         -- technically needed for some of the public read API requests, Reddit
         -- will block requests that don't have an access token.
         logDebug "Acquiring access token"
+        let getAndSaveToken = do
+              newToken <- hoistEither =<< getToken options.ownerUsername options.authInfo
+              modify $ \s -> s{bearerTokenCache = Just newToken}
+              pure newToken
         bearerToken <- do
-          oldToken <- gets (.bearerToken)
+          oldToken <- gets (.bearerTokenCache)
           case oldToken of
             Nothing -> do
               logDebug "No existing token, acquiring new token"
-              newToken <- runReq' (getToken options.authInfo)
-              modify $ \s -> s{bearerToken = Just newToken}
+              newToken <- getAndSaveToken
               logDebug "Acquired new token"
               pure newToken
             Just token -> do
@@ -73,10 +82,12 @@ main = runStdoutLoggingT $ do
                   pure token
                 else do
                   logDebug "Token is expired, acquiring new token"
-                  newToken <- runReq' (getToken options.authInfo)
-                  modify $ \s -> s{bearerToken = Just newToken}
+                  newToken <- getAndSaveToken
                   logDebug "Acquired new token"
                   pure newToken
+        let runReddit :: ReaderT RedditClientConfig m a -> m a
+            runReddit = usingReaderT (RedditClientConfig options.ownerUsername bearerToken)
+            runRedditE = hoistEither <=< runReddit
 
         -- TODO: This only retrieves the first page of new comments (at most
         -- 100). It's possible that there could be more than 100 new comments
@@ -85,7 +96,7 @@ main = runStdoutLoggingT $ do
         -- recently replied-to comment and traverses the response of the new
         -- comments API until we find a comment that has been replied to.
         logDebug "Retrieving new comments"
-        comments <- runReq' (getNewComments bearerToken options.subreddit)
+        comments <- runRedditE $ getNewComments options.subreddit
         logDebug $ "Retrieved new comments" :# ["comments" .= map (.permalink) comments]
 
         -- Loop through every new comment.
@@ -112,7 +123,7 @@ main = runStdoutLoggingT $ do
                 -- article in cache, so that we can make only a single API
                 -- request per article rather than per comment.
                 logDebug "Retrieving replies from Reddit"
-                replies <- lift $ runReq' $ getReplies bearerToken comment
+                replies <- lift $ runRedditE $ getReplies comment
                 logDebug "Retrieved replies from Reddit"
                 -- TODO: This will eventually run out of memory. We should
                 -- implement some sort of eviction. A big enough LRU should
@@ -127,7 +138,7 @@ main = runStdoutLoggingT $ do
             -- prepare a reply.
             results <- forM mentions $ \mention -> withThreadContext ["mention" .= mention] $ do
               logDebug "Searching for mentioned manga"
-              searchResults <- lift $ runReq' (searchManga mention)
+              searchResults <- lift $ runRedditE (searchManga mention)
               logDebug $ "Found search results" :# ["search_results" .= searchResults]
               let result = pickManga mention searchResults
               logDebug $ "Picked manga" :# ["result" .= result]
@@ -141,7 +152,9 @@ main = runStdoutLoggingT $ do
           then logDebug "No replies to perform"
           else forM_ replies $ \(comment, reply) -> withThreadContext ["comment" .= comment] $ do
             logDebug $ "Replying to comment" :# ["reply" .= reply]
-            runReq defaultHttpConfig $ replyToComment bearerToken comment reply
+            if options.dryRun
+              then logDebug "Dry run, skipping reply"
+              else runReddit $ replyToComment comment reply
             logDebug "Replied to comment"
 
       case result of
@@ -152,9 +165,6 @@ main = runStdoutLoggingT $ do
       liftIO $ threadDelay (secondsToMicro 10)
       logDebug "Finished waiting, starting next run"
  where
-  runReq' :: (MonadIO m) => Req (Either String a) -> ExceptT String m a
-  runReq' = hoistEither <=< runReq defaultHttpConfig
-
   foreverWithState :: (Monad m) => s -> StateT s m a -> m ()
   foreverWithState s a = do
     s' <- execStateT a s

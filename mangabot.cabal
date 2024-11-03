@@ -42,6 +42,9 @@ common relude
 common aeson
   build-depends: aeson ==2.2.3.0
 
+common monad-logger-aeson
+  build-depends: monad-logger-aeson ==0.4.1.3
+
 common optparse-applicative
   build-depends: optparse-applicative ==0.18.1.0
 
@@ -51,23 +54,35 @@ common req
 common time
   build-depends: time ==1.12.2
 
+common uuid
+  build-depends: uuid ==1.3.16
+
 library
   import:
     options
     , base
     , relude
     , aeson
+    , monad-logger-aeson
     , optparse-applicative
     , req
     , time
+    , uuid
 
-  build-depends:   megaparsec ==9.6.1
+  build-depends:
+    , case-insensitive  ==1.2.1.0
+    , http-client       ==0.7.17
+    , http-types        ==0.12.4
+    , megaparsec        ==9.6.1
+
   hs-source-dirs:  src
 
   -- cabal-fmt: expand src
   exposed-modules:
     MangaBot
+    MangaBot.Logging
     MangaBot.Mangadex
+    MangaBot.Orphans
     MangaBot.Reddit
 
 executable mangabot
@@ -76,15 +91,14 @@ executable mangabot
     , base
     , relude
     , aeson
+    , monad-logger-aeson
     , optparse-applicative
     , req
     , time
+    , uuid
 
   ghc-options:    -threaded
-  build-depends:
-    , mangabot
-    , monad-logger-aeson  ==0.4.1.3
-
+  build-depends:  mangabot
   hs-source-dirs: app
   main-is:        Main.hs
 
