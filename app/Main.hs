@@ -19,7 +19,7 @@ import MangaBot.Reddit (AuthInfo (..), BearerToken (..), Comment (..), RedditCli
 data Options = Options
   { authInfo :: AuthInfo
   , subreddit :: Subreddit
-  , ownerUsername :: Text
+  , owner :: Text
   , dryRun :: Bool
   }
   deriving stock (Show, Generic)
@@ -30,7 +30,7 @@ optionsP =
   Options
     <$> authInfoP
     <*> subredditP
-    <*> strOption (long "owner-username" <> metavar "USERNAME" <> help "Username of the bot operator")
+    <*> strOption (long "owner" <> metavar "USERNAME" <> help "Username of the bot operator")
     <*> switch (long "dry-run" <> help "Don't actually reply to comments")
 
 argparser :: ParserInfo Options
@@ -62,7 +62,7 @@ main = runReq defaultHttpConfig $ runStdoutLoggingT $ do
         -- will block requests that don't have an access token.
         logDebug "Acquiring access token"
         let getAndSaveToken = do
-              newToken <- hoistEither =<< getToken options.ownerUsername options.authInfo
+              newToken <- hoistEither =<< getToken options.owner options.authInfo
               modify $ \s -> s{bearerTokenCache = Just newToken}
               pure newToken
         bearerToken <- do
@@ -86,7 +86,7 @@ main = runReq defaultHttpConfig $ runStdoutLoggingT $ do
                   logDebug "Acquired new token"
                   pure newToken
         let runReddit :: ReaderT RedditClientConfig m a -> m a
-            runReddit = usingReaderT (RedditClientConfig options.ownerUsername bearerToken)
+            runReddit = usingReaderT (RedditClientConfig options.owner bearerToken)
             runRedditE = hoistEither <=< runReddit
 
         -- TODO: This only retrieves the first page of new comments (at most

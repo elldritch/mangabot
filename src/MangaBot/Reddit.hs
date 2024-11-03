@@ -157,7 +157,7 @@ authInfoP :: Optparse.Parser AuthInfo
 authInfoP =
   AuthInfo
     <$> strOption (long "client-id" <> metavar "CLIENT_ID" <> help "OAuth2 client ID")
-    <*> strOption (long "client-secret" <> metavar "CLIENT_SECRET" <> help "OAuth2 client secret")
+    <*> strOption (long "client-secret" <> metavar "SECRET" <> help "OAuth2 client secret")
     <*> strOption (long "username" <> metavar "USERNAME" <> help "Reddit bot username")
     <*> strOption (long "password" <> metavar "PASSWORD" <> help "Reddit bot password")
 
